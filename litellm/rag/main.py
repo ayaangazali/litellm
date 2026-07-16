@@ -256,7 +256,7 @@ async def _execute_query_pipeline(
                 is_internal_call.set(_prev_internal)
             rerank_hidden_params = getattr(rerank_response, "_hidden_params", None)
             if isinstance(rerank_hidden_params, dict):
-                rerank_response_cost: Optional[float] = rerank_hidden_params.get("response_cost")
+                rerank_response_cost: float | None = rerank_hidden_params.get("response_cost")
                 rerank_cost = rerank_response_cost or 0.0
             context_chunks = RAGQuery.get_top_chunks_from_rerank(search_response, rerank_response)
 
@@ -295,7 +295,7 @@ async def _execute_query_pipeline(
         if sub_call_cost > 0:
             hidden_params = getattr(response, "_hidden_params", None)
             if isinstance(hidden_params, dict):
-                completion_response_cost: Optional[float] = hidden_params.get("response_cost")
+                completion_response_cost: float | None = hidden_params.get("response_cost")
                 if completion_response_cost is not None:
                     hidden_params["response_cost"] = completion_response_cost + sub_call_cost
 
