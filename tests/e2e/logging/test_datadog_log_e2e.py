@@ -217,6 +217,9 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
+        assert spend_row.total_tokens is not None, (
+            "the spend row must record total_tokens for the token cross-check"
+        )
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
@@ -262,6 +265,9 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
+        assert spend_row.total_tokens is not None, (
+            "the spend row must record total_tokens for the token cross-check"
+        )
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
@@ -302,6 +308,9 @@ class TestDataDogLogDelivery:
             call_type="aresponses",
             cost_anchor=spend_row.spend,
             expect_stream=True,
+        )
+        assert spend_row.total_tokens is not None, (
+            "the spend row must record total_tokens for the token cross-check"
         )
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
