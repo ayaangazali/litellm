@@ -22,7 +22,25 @@ from litellm.ocr.rust_bridge import (
     load_rust_aocr,
     load_rust_ocr,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.utils import client, filter_out_litellm_params
+
+_ENV_REFERENCE_PREFIX = "os.environ/"
+
+
+def _resolve_env_reference(value: str | None) -> str | None:
+    """Resolve an ``os.environ/NAME`` credential/api-base reference to its secret value.
+
+    Deployments created through ``/model/new`` persist ``litellm_params`` verbatim,
+    so their ``api_key``/``api_base`` can reach the OCR host layer as the literal
+    ``os.environ/NAME`` string. The Rust bridge forwards whatever it receives
+    upstream, so the reference must be resolved here, at the host edge, before Rust
+    authorization; otherwise the literal is sent as the credential (upstream 401) or
+    logged. Explicit values and missing env vars are returned unchanged.
+    """
+    if value is None or not value.startswith(_ENV_REFERENCE_PREFIX):
+        return value
+    return get_secret_str(value)
 
 
 def _timeout_to_seconds(
@@ -80,6 +98,9 @@ def _resolve_ocr_call_context(
             f"Invalid document type: {doc_type}. "
             "Must be 'document_url', 'image_url', or 'file'"
         )
+
+    api_key = _resolve_env_reference(api_key)
+    api_base = _resolve_env_reference(api_base)
 
     (
         model,

@@ -480,3 +480,84 @@ def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert "Rust OCR bridge is required" in str(exc_info.value)
+
+
+def test_ocr_resolves_os_environ_api_key_before_rust(fake_bridge, monkeypatch):
+    """A `/model/new` deployment persists `api_key` verbatim, so the OCR host
+    receives the literal `os.environ/NAME`. It must be resolved to the secret
+    value before Rust, never forwarded as the credential itself (upstream 401)."""
+    monkeypatch.setenv("MISTRAL_OCR_TEST_KEY", "sk-resolved-secret")
+
+    litellm.ocr(
+        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY"
+    )
+
+    call = fake_bridge.calls[0]
+    assert call["api_key"] == "sk-resolved-secret"
+    assert call["api_key"] != "os.environ/MISTRAL_OCR_TEST_KEY"
+
+
+def test_ocr_resolves_os_environ_api_base_before_rust(fake_bridge, monkeypatch):
+    monkeypatch.setenv("MISTRAL_OCR_TEST_BASE", "https://resolved.mistral.example")
+
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        api_base="os.environ/MISTRAL_OCR_TEST_BASE",
+    )
+
+    api_base = fake_bridge.calls[0]["api_base"]
+    assert not api_base.startswith("os.environ/")
+    assert api_base.startswith("https://resolved.mistral.example")
+
+
+def test_ocr_preserves_explicit_api_key(fake_bridge):
+    """A directly supplied key must reach Rust unchanged; only `os.environ/`
+    references are resolved."""
+    litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-explicit-key")
+
+    assert fake_bridge.calls[0]["api_key"] == "sk-explicit-key"
+
+
+def test_ocr_missing_os_environ_api_key_resolves_to_none(fake_bridge, monkeypatch):
+    """A reference to an unset env var must not be forwarded as a literal; it
+    resolves to None so the missing-key path behaves like an absent credential."""
+    monkeypatch.delenv("MISTRAL_OCR_TEST_MISSING", raising=False)
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+
+    litellm.ocr(
+        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_MISSING"
+    )
+
+    assert fake_bridge.calls[0]["api_key"] is None
+
+
+def test_resolve_env_reference_resolves_only_prefixed_values(monkeypatch):
+    monkeypatch.setenv("MISTRAL_OCR_TEST_KEY", "sk-resolved-secret")
+    monkeypatch.delenv("MISTRAL_OCR_TEST_MISSING", raising=False)
+
+    assert (
+        ocr_main._resolve_env_reference("os.environ/MISTRAL_OCR_TEST_KEY")
+        == "sk-resolved-secret"
+    )
+    assert ocr_main._resolve_env_reference("sk-explicit") == "sk-explicit"
+    assert ocr_main._resolve_env_reference(None) is None
+    assert (
+        ocr_main._resolve_env_reference("os.environ/MISTRAL_OCR_TEST_MISSING") is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_aocr_resolves_os_environ_api_key_before_rust(
+    fake_async_bridge, monkeypatch
+):
+    monkeypatch.setenv("MISTRAL_OCR_TEST_KEY", "sk-resolved-secret")
+
+    await litellm.aocr(
+        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY"
+    )
+
+    call = fake_async_bridge.calls[0]
+    assert call["api_key"] == "sk-resolved-secret"
+    assert call["api_key"] != "os.environ/MISTRAL_OCR_TEST_KEY"

@@ -9,6 +9,8 @@ litellm --config tests/e2e/gateway/litellm-config.yml --port 4000
 from __future__ import annotations
 
 import os
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -92,6 +94,46 @@ class OcrGateway:
                 json={"model": model, "document": document},
             )
 
+    def _client(self) -> httpx.Client:
+        return httpx.Client(
+            timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
+            headers={"Authorization": f"Bearer {self.master_key}"},
+        )
+
+    def create_model(
+        self, model_name: str, litellm_params: dict[str, str]
+    ) -> httpx.Response:
+        with self._client() as client:
+            return client.post(
+                f"{self.base_url.rstrip('/')}/model/new",
+                json={"model_name": model_name, "litellm_params": litellm_params},
+            )
+
+    def delete_model(self, model_id: str) -> httpx.Response:
+        with self._client() as client:
+            return client.post(
+                f"{self.base_url.rstrip('/')}/model/delete",
+                json={"id": model_id},
+            )
+
+    def model_id(self, model_name: str) -> str | None:
+        with self._client() as client:
+            response = client.get(f"{self.base_url.rstrip('/')}/model/info")
+        assert response.status_code == 200, response.text
+        for model in response.json().get("data", []):
+            if model.get("model_name") == model_name:
+                return model.get("model_info", {}).get("id")
+        return None
+
+    def wait_for_model(self, model_name: str, attempts: int = 20) -> None:
+        for _ in range(attempts):
+            if model_name in self.model_names():
+                return
+            time.sleep(1)
+        raise AssertionError(
+            f"{model_name} did not appear on /model/info within {attempts}s"
+        )
+
 
 @dataclass(frozen=True)
 class OcrResources:
@@ -146,3 +188,49 @@ class TestRustOcrGateway:
 
         assert response.status_code == 200, response.text
         _assert_ocr_response_shape(response.json())
+
+
+class TestRustOcrDynamicDeployment:
+    """Regression for the DB-created deployment credential path (report row A4).
+
+    A deployment created through `/model/new` persists `litellm_params` verbatim,
+    so its `api_key` reaches the Rust OCR host as the literal `os.environ/NAME`.
+    The host must resolve it before Rust authorization; otherwise the literal is
+    sent upstream as the credential and OCR fails with a 401/500.
+    """
+
+    def test_os_environ_api_key_deployment_lifecycle(
+        self, resources: OcrResources
+    ) -> None:
+        if not os.getenv("MISTRAL_API_KEY"):
+            pytest.skip("Set MISTRAL_API_KEY on the proxy for the live OCR lifecycle")
+
+        gateway = resources.gateway
+        model_name = f"rust-ocr-env-e2e-{uuid.uuid4().hex[:8]}"
+
+        create = gateway.create_model(
+            model_name=model_name,
+            litellm_params={
+                "model": "mistral/mistral-ocr-latest",
+                "api_key": "os.environ/MISTRAL_API_KEY",
+            },
+        )
+        assert create.status_code == 200, create.text
+
+        try:
+            gateway.wait_for_model(model_name)
+
+            response = gateway.ocr(
+                model_name,
+                {"type": "document_url", "document_url": TEST_PDF_URL},
+            )
+            assert response.status_code == 200, response.text
+            _assert_ocr_response_shape(response.json())
+            assert "os.environ/MISTRAL_API_KEY" not in response.text
+        finally:
+            model_id = gateway.model_id(model_name)
+            assert model_id is not None
+            delete = gateway.delete_model(model_id)
+            assert delete.status_code == 200, delete.text
+
+        assert model_name not in gateway.model_names()
