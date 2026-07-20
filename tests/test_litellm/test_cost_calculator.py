@@ -3479,3 +3479,40 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_openrouter_grok_4_5_pricing(monkeypatch):
+    """
+    xAI's Grok 4.5 has a native xai/ pricing entry but the openrouter/ prefix
+    was missing, so requests routed through OpenRouter tracked zero cost.
+    Prices verified against the OpenRouter models API (x-ai/grok-4.5: $2.00/M
+    input, $6.00/M output, $0.30/M cache read, all doubled above 200k prompt
+    tokens, 500,000 context).
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model_info = litellm.model_cost.get("openrouter/x-ai/grok-4.5")
+    assert model_info is not None, "Missing model pricing entry: openrouter/x-ai/grok-4.5"
+    assert model_info["input_cost_per_token"] == 2e-06
+    assert model_info["output_cost_per_token"] == 6e-06
+    assert model_info["cache_read_input_token_cost"] == 3e-07
+    assert model_info["max_input_tokens"] == 500000
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_vision"] is True
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model="openrouter/x-ai/grok-4.5",
+        prompt_tokens=1000,
+        completion_tokens=100,
+    )
+    assert prompt_cost == pytest.approx(1000 * 2e-06)
+    assert completion_cost_value == pytest.approx(100 * 6e-06)
+
+    long_prompt_cost, long_completion_cost = cost_per_token(
+        model="openrouter/x-ai/grok-4.5",
+        prompt_tokens=250_000,
+        completion_tokens=100,
+    )
+    assert long_prompt_cost == pytest.approx(250_000 * 4e-06)
+    assert long_completion_cost == pytest.approx(100 * 1.2e-05)
