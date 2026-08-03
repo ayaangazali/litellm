@@ -405,7 +405,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         except Exception:
             pass
-        return AnthropicModelInfo._get_model_capability(model, key) is True
+        if AnthropicModelInfo._get_model_capability(model, key) is True:
+            return True
+        if custom_llm_provider and "/" not in model:
+            return AnthropicModelInfo._get_model_capability(f"{custom_llm_provider}/{model}", key) is True
+        return False
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:

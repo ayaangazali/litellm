@@ -294,3 +294,57 @@ def test_non_adaptive_request_without_effort_is_untouched():
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])
+def test_effort_passes_through_for_deepseek_v4(monkeypatch, model):
+    """DeepSeek's Anthropic-compatible endpoint accepts output_config.effort and
+    ignores thinking.budget_tokens, so translating effort into a legacy budget
+    silently disabled reasoning control. The model map entries are keyed
+    deepseek/<model> while this transform receives the bare id, so the capability
+    lookup has to try the provider-prefixed key for the flag to be seen at all.
+    """
+    import litellm
+    from litellm.llms.deepseek.messages.transformation import (
+        DeepSeekAnthropicMessagesConfig,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    result = DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 8000,
+            "output_config": {"effort": "low"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"] == {"effort": "low"}
+    assert "thinking" not in result
+
+
+def test_supports_model_capability_resolves_provider_prefixed_entry(monkeypatch):
+    """Regression for the lookup half: a bare model id must still resolve a
+    capability declared on the provider-namespaced map entry."""
+    import litellm
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    assert (
+        AnthropicModelInfo._supports_model_capability(
+            "deepseek-v4-flash", "supports_output_config", "deepseek"
+        )
+        is True
+    )
+    assert (
+        AnthropicModelInfo._supports_model_capability(
+            "deepseek-chat", "supports_output_config", "deepseek"
+        )
+        is False
+    )
